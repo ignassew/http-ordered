@@ -3,7 +3,7 @@ use bytes::{Bytes, BytesMut};
 
 use std::borrow::Borrow;
 use std::error::Error;
-use std::convert::{TryFrom};
+use std::convert::TryFrom;
 use std::hash::{Hash, Hasher};
 use std::mem::MaybeUninit;
 use std::str::FromStr;
@@ -1107,7 +1107,7 @@ impl HeaderName {
                 Ok(Custom(val).into())
             }
             Repr::Custom(MaybeLower { buf, lower: false }) => {
-                use bytes::{BufMut};
+                use bytes::BufMut;
                 let mut dst = BytesMut::with_capacity(buf.len());
 
                 for b in buf.iter() {
@@ -1503,8 +1503,8 @@ impl<'a> HdrName<'a> {
         HdrName {
             // Invariant (on MaybeLower): follows from the precondition
             inner: Repr::Custom(MaybeLower {
-                buf: buf,
-                lower: lower,
+                buf,
+                lower,
             }),
         }
     }
