@@ -19,6 +19,7 @@ fn header_map_fuzz() {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct Fuzz {
     // The magic seed that makes the test case reproducible
     seed: [u8; 32],
@@ -34,6 +35,7 @@ struct Fuzz {
 struct Weight {
     insert: usize,
     remove: usize,
+    append: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +50,11 @@ enum Action {
         name: HeaderName,         // Name to insert
         val: HeaderValue,         // Value to insert
         old: Option<HeaderValue>, // Old value
+    },
+    Append {
+        name: HeaderName,
+        val: HeaderValue,
+        ret: bool,
     },
     Remove {
         name: HeaderName,         // Name to remove
@@ -73,6 +80,7 @@ impl Fuzz {
         let weight = Weight {
             insert: rng.gen_range(1, 10),
             remove: rng.gen_range(1, 10),
+            append: rng.gen_range(1, 10),
         };
 
         while steps.len() < num {
@@ -119,7 +127,7 @@ impl AltMap {
 
     /// This will also apply the action against `self`
     fn gen_action(&mut self, weight: &Weight, rng: &mut StdRng) -> Action {
-        let sum = weight.insert + weight.remove;
+        let sum = weight.insert + weight.remove + weight.append;
 
         let mut num = rng.gen_range(0, sum);
 
@@ -131,6 +139,12 @@ impl AltMap {
 
         if num < weight.remove {
             return self.gen_remove(rng);
+        }
+
+        num -= weight.remove;
+
+        if num < weight.append {
+            return self.gen_append(rng);
         }
 
         unreachable!();
@@ -155,6 +169,22 @@ impl AltMap {
         Action::Remove {
             name: name,
             val: val,
+        }
+    }
+
+    fn gen_append(&mut self, rng: &mut StdRng) -> Action {
+        let name = self.gen_name(-5, rng);
+        let val = gen_header_value(rng);
+
+        let vals = self.map.entry(name.clone()).or_insert(vec![]);
+
+        let ret = !vals.is_empty();
+        vals.push(val.clone());
+
+        Action::Append {
+            name: name,
+            val: val,
+            ret: ret,
         }
     }
 
@@ -202,6 +232,11 @@ impl AltMap {
         for (key, val) in &self.map {
             // Test get
             assert_eq!(other.get(key), val.get(0));
+
+            // Test get_all
+            let vals = other.get_all(key);
+            let actual: Vec<_> = vals.iter().collect();
+            assert_eq!(&actual[..], &val[..]);
         }
     }
 }
@@ -214,8 +249,14 @@ impl Action {
                 assert_eq!(actual, old);
             }
             Action::Remove { name, val } => {
+                // Just to help track the state, load all associated values.
+                let _ = map.get_all(&name).iter().collect::<Vec<_>>();
+
                 let actual = map.remove(&name);
                 assert_eq!(actual, val);
+            }
+            Action::Append { name, val, ret } => {
+                assert_eq!(ret, map.append(name, val));
             }
         }
     }

@@ -45,7 +45,7 @@ pub use self::into_header_name::IntoHeaderName;
 /// ```
 #[derive(Clone, PartialEq, Eq)]
 pub struct HeaderMap<T = HeaderValue> {
-    inner: IndexMap<HeaderName, T>
+    inner: IndexMap<HeaderName, Vec<T>>
 }
 
 // # Implementation notes
@@ -79,7 +79,8 @@ pub struct HeaderMap<T = HeaderValue> {
 /// more than once if it has more than one associated value.
 #[derive(Debug)]
 pub struct Iter<'a, T> {
-    inner: indexmap::map::Iter<'a, HeaderName, T>,
+    buffer: Vec<(&'a HeaderName, &'a T)>,
+    inner: indexmap::map::Iter<'a, HeaderName, Vec<T>>,
 }
 
 /// `HeaderMap` mutable entry iterator
@@ -88,7 +89,8 @@ pub struct Iter<'a, T> {
 /// yielded more than once if it has more than one associated value.
 #[derive(Debug)]
 pub struct IterMut<'a, T> {
-    inner: indexmap::map::IterMut<'a, HeaderName, T>
+    buffer: Vec<(&'a HeaderName, &'a mut T)>,
+    inner: indexmap::map::IterMut<'a, HeaderName, Vec<T>>
 }
 
 /// An owning iterator over the entries of a `HeaderMap`.
@@ -96,7 +98,8 @@ pub struct IterMut<'a, T> {
 /// This struct is created by the `into_iter` method on `HeaderMap`.
 #[derive(Debug)]
 pub struct IntoIter<T> {
-    inner: indexmap::map::IntoIter<HeaderName, T>
+    buffer: Vec<(Option<HeaderName>, T)>,
+    inner: indexmap::map::IntoIter<HeaderName, Vec<T>>
 }
 
 /// An iterator over `HeaderMap` keys.
@@ -105,7 +108,7 @@ pub struct IntoIter<T> {
 /// associated value.
 #[derive(Debug)]
 pub struct Keys<'a, T> {
-    inner: indexmap::map::Keys<'a, HeaderName, T>,
+    inner: indexmap::map::Keys<'a, HeaderName, Vec<T>>,
 }
 
 /// `HeaderMap` value iterator.
@@ -125,7 +128,8 @@ pub struct ValuesMut<'a, T> {
 /// A drain iterator for `HeaderMap`.
 #[derive(Debug)]
 pub struct Drain<'a, T> {
-    inner: indexmap::map::Drain<'a, HeaderName, T>
+    buffer: Vec<(Option<HeaderName>, T)>,
+    inner: indexmap::map::Drain<'a, HeaderName, Vec<T>>
 }
 
 /// A view to all values stored in a single entry.
@@ -133,8 +137,7 @@ pub struct Drain<'a, T> {
 /// This struct is returned by `HeaderMap::get_all`.
 #[derive(Debug)]
 pub struct GetAll<'a, T> {
-    map: &'a HeaderMap<T>,
-    index: Option<usize>,
+    inner: Option<&'a Vec<T>>
 }
 
 /// A view into a single location in a `HeaderMap`, which may be vacant or occupied.
@@ -152,7 +155,7 @@ pub enum Entry<'a, T: 'a> {
 /// This struct is returned as part of the `Entry` enum.
 #[derive(Debug)]
 pub struct VacantEntry<'a, T> {
-    inner: indexmap::map::VacantEntry<'a, HeaderName, T>
+    inner: indexmap::map::VacantEntry<'a, HeaderName, Vec<T>>
 }
 
 /// A view into a single occupied location in a `HeaderMap`.
@@ -160,27 +163,26 @@ pub struct VacantEntry<'a, T> {
 /// This struct is returned as part of the `Entry` enum.
 #[derive(Debug)]
 pub struct OccupiedEntry<'a, T> {
-    inner: indexmap::map::OccupiedEntry<'a, HeaderName, T>
+    inner: indexmap::map::OccupiedEntry<'a, HeaderName, Vec<T>>
 }
 
 /// An iterator of all values associated with a single header name.
 #[derive(Debug)]
 pub struct ValueIter<'a, T> {
-    inner: indexmap::map::Values<'a, HeaderName, T>
+    inner: Option<std::slice::Iter<'a, T>>
 }
 
 /// A mutable iterator of all values associated with a single header name.
 #[derive(Debug)]
 pub struct ValueIterMut<'a, T> {
-    inner: indexmap::map::ValuesMut<'a, HeaderName, T>
+    inner: Option<std::slice::IterMut<'a, T>>
 }
 
 /// An drain iterator of all values associated with a single header name.
 #[derive(Debug)]
 pub struct ValueDrain<'a, T> {
-    first: Option<T>,
-    next: Option<::std::vec::IntoIter<T>>,
-    lt: PhantomData<&'a mut HeaderMap<T>>,
+    inner: Vec<T>,
+    lt: PhantomData<&'a HeaderMap>
 }
 
 /// This limit falls out from above.
@@ -232,7 +234,7 @@ impl<T> HeaderMap<T> {
     /// let map: HeaderMap<u32> = HeaderMap::with_capacity(10);
     ///
     /// assert!(map.is_empty());
-    /// assert_eq!(12, map.capacity());
+    /// assert_eq!(10, map.capacity());
     /// ```
     pub fn with_capacity(capacity: usize) -> HeaderMap<T> {
         if capacity == 0 {
@@ -255,9 +257,6 @@ impl<T> HeaderMap<T> {
     /// This number can be greater than or equal to the number of **keys**
     /// stored given that a single key may have more than one associated value.
     ///
-    /// NOTE: Due to changing the implementation, we no longer allow multiple headers of the same
-    /// name.
-    ///
     /// # Examples
     ///
     /// ```
@@ -277,16 +276,16 @@ impl<T> HeaderMap<T> {
     /// assert_eq!(3, map.len());
     /// ```
     pub fn len(&self) -> usize {
-        self.inner.len()
+        self.inner
+            .values()
+            .map(|v| v.len())
+            .sum()
     }
 
     /// Returns the number of keys stored in the map.
     ///
     /// This number will be less than or equal to `len()` as each key may have
     /// more than one associated value.
-    ///
-    /// NOTE: Due to changing the implementation, we no longer allow multiple headers of the same
-    /// name.
     ///
     /// # Examples
     ///
@@ -306,7 +305,6 @@ impl<T> HeaderMap<T> {
     ///
     /// assert_eq!(2, map.keys_len());
     /// ```
-    #[deprecated]
     pub fn keys_len(&self) -> usize {
         self.inner.len()
     }
@@ -364,7 +362,7 @@ impl<T> HeaderMap<T> {
     /// assert_eq!(0, map.capacity());
     ///
     /// map.insert(HOST, "hello.world".parse().unwrap());
-    /// assert_eq!(6, map.capacity());
+    /// assert_eq!(3, map.capacity());
     /// ```
     pub fn capacity(&self) -> usize {
         self.inner.capacity()
@@ -402,9 +400,6 @@ impl<T> HeaderMap<T> {
     /// is returned. Use `get_all` to get all values associated with a given
     /// key. Returns `None` if there are no values associated with the key.
     ///
-    /// NOTE: Due to changing the implementation, we no longer allow multiple headers of the same
-    /// name.
-    ///
     /// # Examples
     ///
     /// ```
@@ -425,10 +420,12 @@ impl<T> HeaderMap<T> {
         K: AsHeaderName,
     {
         if let Ok(key) = key.try_into() {
-            self.inner.get(&key)
-        } else {
-            None
+            if let Some(value) = self.inner.get(&key) {
+                return value.first();
+            }
         }
+
+        None
     }
 
     /// Returns a mutable reference to the value associated with the key.
@@ -452,8 +449,13 @@ impl<T> HeaderMap<T> {
     where
         K: AsHeaderName,
     {
-        let key: HeaderName = key.try_into().ok().unwrap();
-        self.inner.get_mut(&key)
+        if let Ok(key) = key.try_into() {
+            if let Some(value) = self.inner.get_mut(&key) {
+                return value.first_mut();
+            }
+        }
+
+        None
     }
 
     /// Returns a view of all values associated with a key.
@@ -461,9 +463,6 @@ impl<T> HeaderMap<T> {
     /// The returned view does not incur any allocations and allows iterating
     /// the values associated with the key.  See [`GetAll`] for more details.
     /// Returns `None` if there are no values associated with the key.
-    ///
-    /// NOTE: Due to changing the implementation, we no longer allow multiple headers of the same
-    /// name.
     ///
     /// [`GetAll`]: struct.GetAll.html
     ///
@@ -484,12 +483,16 @@ impl<T> HeaderMap<T> {
     /// assert_eq!(&"goodbye", iter.next().unwrap());
     /// assert!(iter.next().is_none());
     /// ```
-    #[allow(unused_variables)]
     pub fn get_all<K>(&self, key: K) -> GetAll<'_, T>
     where
         K: AsHeaderName,
     {
-        unimplemented!()
+        let key: HeaderName = key.try_into().ok().unwrap();
+        if let Some(vec) = self.inner.get(&key) {
+            GetAll { inner: Some(vec) }
+        } else {
+            GetAll { inner: None }
+        }
     }
 
     /// Returns true if the map contains a value for the specified key.
@@ -535,7 +538,7 @@ impl<T> HeaderMap<T> {
     /// }
     /// ```
     pub fn iter(&self) -> Iter<'_, T> {
-        Iter { inner: self.inner.iter() }
+        Iter { inner: self.inner.iter(), buffer: Vec::new() }
     }
 
     /// An iterator visiting all key-value pairs, with mutable value references.
@@ -560,7 +563,7 @@ impl<T> HeaderMap<T> {
     /// }
     /// ```
     pub fn iter_mut(&mut self) -> IterMut<'_, T> {
-        IterMut { inner: self.inner.iter_mut() }
+        IterMut { inner: self.inner.iter_mut(), buffer: Vec::new() }
     }
 
     /// An iterator visiting all keys.
@@ -661,19 +664,14 @@ impl<T> HeaderMap<T> {
     ///
     ///
     /// assert_eq!(drain.next(), Some((Some(HOST), "hello".parse().unwrap())));
-    /// assert_eq!(drain.next(), Some((None, "goodbye".parse().unwrap())));
+    /// assert_eq!(drain.next(), Some((Some(HOST), "goodbye".parse().unwrap())));
     ///
     /// assert_eq!(drain.next(), Some((Some(CONTENT_LENGTH), "123".parse().unwrap())));
     ///
     /// assert_eq!(drain.next(), None);
     /// ```
     pub fn drain(&mut self) -> Drain<'_, T> {
-        Drain { inner: self.inner.drain(RangeFull) }
-    }
-
-    #[allow(unused_variables)]
-    fn value_iter(&self, idx: Option<usize>) -> ValueIter<'_, T> {
-        ValueIter { inner: self.inner.values() }
+            Drain { inner: self.inner.drain(RangeFull), buffer: Vec::new() }
     }
 
     /// Gets the given key's corresponding entry in the map for in-place
@@ -761,7 +759,9 @@ impl<T> HeaderMap<T> {
         K: IntoHeaderName,
     {
         let key: HeaderName = key.try_into().ok().unwrap();
-        self.inner.insert(key, val)
+        self.inner
+            .insert(key, vec![val])
+            .map(|mut x| x.remove(0))
     }
 
     /// Inserts a key-value pair into the map.
@@ -773,9 +773,6 @@ impl<T> HeaderMap<T> {
     /// of the list of values currently associated with the key. The key is not
     /// updated, though; this matters for types that can be `==` without being
     /// identical.
-    ///
-    /// NOTE: Due to changing the implementation, we no longer allow multiple headers of the same
-    /// name.
     ///
     /// # Examples
     ///
@@ -793,12 +790,18 @@ impl<T> HeaderMap<T> {
     /// assert_eq!("world", *i.next().unwrap());
     /// assert_eq!("earth", *i.next().unwrap());
     /// ```
-    #[allow(unused_variables)]
     pub fn append<K>(&mut self, key: K, value: T) -> bool
     where
         K: IntoHeaderName,
     {
-        unimplemented!()
+        let key: HeaderName = key.try_into().ok().unwrap();
+        if let Some(vec) = self.inner.get_mut(&key) {
+            vec.push(value);
+            true
+        } else {
+            _ = self.insert(key, value);
+            false
+        }
     }
 
     /// Removes a key from the map, returning the value associated with the key.
@@ -826,7 +829,16 @@ impl<T> HeaderMap<T> {
         K: AsHeaderName,
     {
         let key: HeaderName = key.try_into().ok().unwrap();
-        self.inner.shift_remove(&key)
+        self.inner
+            .shift_remove(&key)
+            .and_then(|mut f|
+                if f.is_empty() {
+                    None
+                }
+                else {
+                    Some(f.remove(0))
+                }
+            )
     }
 }
 
@@ -894,15 +906,15 @@ impl<T> IntoIterator for HeaderMap<T> {
     /// let mut iter = map.into_iter();
     ///
     /// assert_eq!(iter.next(), Some((Some(header::CONTENT_LENGTH), "123".parse().unwrap())));
-    /// assert_eq!(iter.next(), Some((None, "456".parse().unwrap())));
+    /// assert_eq!(iter.next(), Some((Some(header::CONTENT_LENGTH), "456".parse().unwrap())));
     ///
     /// assert_eq!(iter.next(), Some((Some(header::CONTENT_TYPE), "json".parse().unwrap())));
-    /// assert_eq!(iter.next(), Some((None, "html".parse().unwrap())));
-    /// assert_eq!(iter.next(), Some((None, "xml".parse().unwrap())));
+    /// assert_eq!(iter.next(), Some((Some(header::CONTENT_TYPE), "html".parse().unwrap())));
+    /// assert_eq!(iter.next(), Some((Some(header::CONTENT_TYPE), "xml".parse().unwrap())));
     /// assert!(iter.next().is_none());
     /// ```
     fn into_iter(self) -> IntoIter<T> {
-        IntoIter { inner: self.inner.into_iter() }
+        IntoIter { inner: self.inner.into_iter(), buffer: Vec::new() }
     }
 }
 
@@ -991,10 +1003,45 @@ impl<T> Extend<(Option<HeaderName>, T)> for HeaderMap<T> {
     /// assert_eq!(2, v.iter().count());
     /// ```
     fn extend<I: IntoIterator<Item = (Option<HeaderName>, T)>>(&mut self, iter: I) {
-        let iter = iter
-            .into_iter()
-            .map(|(k, v)| (k.unwrap(), v));
-        self.inner.extend(iter)
+        let mut iter = iter.into_iter();
+
+        // The structure of this is a bit weird, but it is mostly to make the
+        // borrow checker happy.
+        let (mut key, mut val) = match iter.next() {
+            Some((Some(key), val)) => (key, val),
+            Some((None, _)) => panic!("expected a header name, but got None"),
+            None => return,
+        };
+
+        'outer: loop {
+            let mut entry = match self.entry(key) {
+                Entry::Occupied(mut e) => {
+                    // Replace all previous values while maintaining a handle to
+                    // the entry.
+                    e.insert(val);
+                    e
+                }
+                Entry::Vacant(e) => e.insert_entry(val),
+            };
+
+            // As long as `HeaderName` is none, keep inserting the value into
+            // the current entry
+            loop {
+                match iter.next() {
+                    Some((Some(k), v)) => {
+                        key = k;
+                        val = v;
+                        continue 'outer;
+                    }
+                    Some((None, v)) => {
+                        entry.append(v);
+                    }
+                    None => {
+                        return;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1043,7 +1090,7 @@ where
     #[inline]
     fn index(&self, index: K) -> &T {
         let index = index.try_into().ok().unwrap();
-        self.inner.index(&index)
+        self.inner.index(&index).first().expect("Inner vector is non-empty")
     }
 }
 
@@ -1053,11 +1100,23 @@ impl<'a, T> Iterator for Iter<'a, T> {
     type Item = (&'a HeaderName, &'a T);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
+        if !self.buffer.is_empty() {
+            return Some(self.buffer.pop().expect("Non-empty buffer"))
+        }
+        assert_eq!(self.buffer.len(), 0);
+        if let Some(pair) = self.inner.next() {
+            for v in pair.1 {
+                self.buffer.push((pair.0, v));
+            }
+            self.buffer.pop()
+        } else {
+            None
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
+        // We can only return size of unique header values.
+        (self.inner.size_hint().0, None)
     }
 }
 
@@ -1072,11 +1131,23 @@ impl<'a, T> Iterator for IterMut<'a, T> {
     type Item = (&'a HeaderName, &'a mut T);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
+        if !self.buffer.is_empty() {
+            return Some(self.buffer.pop().expect("Non-empty buffer"))
+        }
+        assert_eq!(self.buffer.len(), 0);
+        if let Some(pair) = self.inner.next() {
+            for v in pair.1 {
+                self.buffer.push((pair.0, v));
+            }
+            self.buffer.pop()
+        } else {
+            None
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
+        // We can only return size of unique header values.
+        (self.inner.size_hint().0, None)
     }
 }
 
@@ -1140,11 +1211,23 @@ impl<'a, T> Iterator for Drain<'a, T> {
     type Item = (Option<HeaderName>, T);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(k, v)| (Some(k), v))
+        if !self.buffer.is_empty() {
+            return Some(self.buffer.remove(0))
+        }
+        assert_eq!(self.buffer.len(), 0);
+        if let Some(pair) = self.inner.next() {
+            for v in pair.1 {
+                self.buffer.push((Some(pair.0.clone()), v));
+            }
+            Some(self.buffer.remove(0))
+        } else {
+            None
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
+        // We are not sure if there are any additional values
+        (self.inner.size_hint().0, None)
     }
 }
 
@@ -1311,7 +1394,7 @@ impl<'a, T> VacantEntry<'a, T> {
     /// assert_eq!(map["x-hello"], "world");
     /// ```
     pub fn insert(self, value: T) -> &'a mut T {
-        self.inner.insert(value)
+        self.inner.insert(vec![value]).first_mut().expect("vector has 1 element")
     }
 
     /// Insert the value into the entry.
@@ -1333,8 +1416,8 @@ impl<'a, T> VacantEntry<'a, T> {
     /// assert_eq!(map["x-hello"], "world2");
     /// ```
     pub fn insert_entry(self, value: T) -> OccupiedEntry<'a, T> {
-        self.inner.insert(value);
-        unimplemented!()
+        self.inner.insert(vec![value]);
+        todo!()
     }
 }
 
@@ -1364,10 +1447,8 @@ impl<'a, T: 'a> GetAll<'a, T> {
         // This creates a new GetAll struct so that the lifetime
         // isn't bound to &self.
         GetAll {
-            map: self.map,
-            index: self.index,
-        }
-        .into_iter()
+            inner: self.inner,
+        }.into_iter()
     }
 }
 
@@ -1382,7 +1463,10 @@ impl<'a, T> IntoIterator for GetAll<'a, T> {
     type IntoIter = ValueIter<'a, T>;
 
     fn into_iter(self) -> ValueIter<'a, T> {
-        self.map.value_iter(self.index)
+        match self.inner {
+            Some(inner) => ValueIter { inner: Some(inner.into_iter()) },
+            None => ValueIter { inner: None },
+        }
     }
 }
 
@@ -1391,7 +1475,10 @@ impl<'a, 'b: 'a, T> IntoIterator for &'b GetAll<'a, T> {
     type IntoIter = ValueIter<'a, T>;
 
     fn into_iter(self) -> ValueIter<'a, T> {
-        self.map.value_iter(self.index)
+        match self.inner {
+            Some(inner) => ValueIter { inner: Some(inner.into_iter()) },
+            None => ValueIter { inner: None },
+        }
     }
 }
 
@@ -1401,17 +1488,26 @@ impl<'a, T: 'a> Iterator for ValueIter<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
+        match &mut self.inner {
+            Some(iter) => iter.next(),
+            None => None,
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
+        match &self.inner {
+            Some(iter) => iter.size_hint(),
+            None => (0, Some(0)),
+        }
     }
 }
 
 impl<'a, T: 'a> DoubleEndedIterator for ValueIter<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.inner.next_back()
+        match &mut self.inner {
+            Some(iter) => iter.next_back(),
+            None => None,
+        }
     }
 }
 
@@ -1423,13 +1519,19 @@ impl<'a, T: 'a> Iterator for ValueIterMut<'a, T> {
     type Item = &'a mut T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
+        match &mut self.inner {
+            Some(iter) => iter.next(),
+            None => None,
+        }
     }
 }
 
 impl<'a, T: 'a> DoubleEndedIterator for ValueIterMut<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.inner.next_back()
+        match &mut self.inner {
+            Some(iter) => iter.next_back(),
+            None => None,
+        }
     }
 }
 
@@ -1444,7 +1546,18 @@ impl<T> Iterator for IntoIter<T> {
     type Item = (Option<HeaderName>, T);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(k, v)| (Some(k), v))
+        if !self.buffer.is_empty() {
+            return Some(self.buffer.remove(0))
+        }
+        assert_eq!(self.buffer.len(), 0);
+        if let Some(pair) = self.inner.next() {
+            for v in pair.1 {
+                self.buffer.push((Some(pair.0.clone()), v));
+            }
+            Some(self.buffer.remove(0))
+        } else {
+            None
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -1498,7 +1611,7 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// }
     /// ```
     pub fn get(&self) -> &T {
-        self.inner.get()
+        self.inner.get().first().unwrap()
     }
 
     /// Get a mutable reference to the first value in the entry.
@@ -1522,7 +1635,7 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// }
     /// ```
     pub fn get_mut(&mut self) -> &mut T {
-        self.inner.get_mut()
+        self.inner.get_mut().first_mut().unwrap()
     }
 
     /// Converts the `OccupiedEntry` into a mutable reference to the **first**
@@ -1549,7 +1662,7 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// assert_eq!("hello.world-2", map["host"]);
     /// ```
     pub fn into_mut(self) -> &'a mut T {
-        self.inner.into_mut()
+        self.inner.into_mut().first_mut().unwrap()
     }
 
     /// Sets the value of the entry.
@@ -1572,16 +1685,13 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// assert_eq!("earth", map["host"]);
     /// ```
     pub fn insert(&mut self, value: T) -> T {
-        self.inner.insert(value)
+        self.inner.insert(vec![value]).remove(0)
     }
 
     /// Sets the value of the entry.
     ///
     /// This function does the same as `insert` except it returns an iterator
     /// that yields all values previously associated with the key.
-    ///
-    /// NOTE: Due to changing the implementation, we no longer allow multiple headers of the same
-    /// name.
     ///
     /// # Examples
     ///
@@ -1600,18 +1710,15 @@ impl<'a, T> OccupiedEntry<'a, T> {
     ///
     /// assert_eq!("earth", map["host"]);
     /// ```
-    #[allow(unused_variables)]
     pub fn insert_mult(&mut self, value: T) -> ValueDrain<'_, T> {
-        unimplemented!()
+        let old_value = self.inner.insert(vec![value]);
+        ValueDrain { inner: old_value, lt: PhantomData }
     }
 
     /// Insert the value into the entry.
     ///
     /// The new value is appended to the end of the entry's value list. All
     /// previous values associated with the entry are retained.
-    ///
-    /// NOTE: Due to changing the implementation, we no longer allow multiple headers of the same
-    /// name.
     ///
     /// # Examples
     ///
@@ -1629,9 +1736,10 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// assert_eq!("world", *i.next().unwrap());
     /// assert_eq!("earth", *i.next().unwrap());
     /// ```
-    #[allow(unused_variables)]
     pub fn append(&mut self, value: T) {
-        unimplemented!()
+        self.inner
+            .get_mut()
+            .push(value)
     }
 
     /// Remove the entry from the map.
@@ -1654,7 +1762,7 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// assert!(!map.contains_key("host"));
     /// ```
     pub fn remove(self) -> T {
-        self.inner.shift_remove()
+        self.inner.shift_remove().remove(0)
     }
 
     /// Remove the entry from the map.
@@ -1679,7 +1787,8 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// assert!(!map.contains_key("host"));
     /// ```
     pub fn remove_entry(self) -> (HeaderName, T) {
-        self.inner.shift_remove_entry()
+        let (k, mut v) = self.inner.shift_remove_entry();
+        (k, v.remove(0))
     }
 
     /// Remove the entry from the map.
@@ -1687,19 +1796,14 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// The key and all values associated with the entry are removed and
     /// returned.
     ///
-    /// NOTE: Due to changing the implementation, we no longer allow multiple headers of the same
-    /// name.
-    ///
     pub fn remove_entry_mult(self) -> (HeaderName, ValueDrain<'a, T>) {
-        unimplemented!()
+        let (k, v) = self.inner.shift_remove_entry();
+        (k, ValueDrain { inner: v, lt: PhantomData })
     }
 
     /// Returns an iterator visiting all values associated with the entry.
     ///
     /// Values are iterated in insertion order.
-    ///
-    /// NOTE: Due to changing the implementation, we no longer allow multiple headers of the same
-    /// name.
     ///
     /// # Examples
     ///
@@ -1717,16 +1821,13 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// }
     /// ```
     pub fn iter(&self) -> ValueIter<'_, T> {
-        unimplemented!()
+        ValueIter { inner: Some(self.inner.get().iter()) }
     }
 
     /// Returns an iterator mutably visiting all values associated with the
     /// entry.
     ///
     /// Values are iterated in insertion order.
-    ///
-    /// NOTE: Due to changing the implementation, we no longer allow multiple headers of the same
-    /// name.
     ///
     /// # Examples
     ///
@@ -1748,7 +1849,7 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// assert_eq!(&"earth-boop", i.next().unwrap());
     /// ```
     pub fn iter_mut(&mut self) -> ValueIterMut<'_, T> {
-        unimplemented!()
+        ValueIterMut { inner: Some(self.inner.get_mut().iter_mut()) }
     }
 }
 
@@ -1757,7 +1858,7 @@ impl<'a, T> IntoIterator for OccupiedEntry<'a, T> {
     type IntoIter = ValueIterMut<'a, T>;
 
     fn into_iter(self) -> ValueIterMut<'a, T> {
-        unimplemented!()
+        todo!()
     }
 }
 
@@ -1785,29 +1886,14 @@ impl<'a, T> Iterator for ValueDrain<'a, T> {
     type Item = T;
 
     fn next(&mut self) -> Option<T> {
-        if self.first.is_some() {
-            self.first.take()
-        } else if let Some(ref mut extras) = self.next {
-            extras.next()
-        } else {
-            None
-        }
+        if self.inner.is_empty() {
+            return None
+        };
+        Some(self.inner.remove(0))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        match (&self.first, &self.next) {
-            // Exactly 1
-            (&Some(_), &None) => (1, Some(1)),
-            // 1 + extras
-            (&Some(_), &Some(ref extras)) => {
-                let (l, u) = extras.size_hint();
-                (l + 1, u.map(|u| u + 1))
-            },
-            // Extras only
-            (&None, &Some(ref extras)) => extras.size_hint(),
-            // No more
-            (&None, &None) => (0, Some(0)),
-        }
+        (self.inner.len(), Some(self.inner.len()))
     }
 }
 

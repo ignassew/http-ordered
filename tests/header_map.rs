@@ -2,7 +2,6 @@ use http::header::*;
 use http::*;
 
 #[test]
-#[ignore = "Due to changing the implementation, we no longer allow multiple headers of the same name"]
 fn smoke() {
     let mut headers = HeaderMap::new();
 
@@ -38,6 +37,28 @@ fn smoke() {
 
 #[test]
 #[should_panic]
+#[ignore = "indexmap implementation has different max capacity"]
+fn reserve_over_capacity() {
+    // See https://github.com/hyperium/http/issues/352
+    let mut headers = HeaderMap::<u32>::with_capacity(32);
+    headers.reserve(50_000); // over MAX_SIZE
+}
+
+#[test]
+fn with_capacity_max() {
+    // The largest capacity such that (cap + cap / 3) < MAX_SIZE.
+    HeaderMap::<u32>::with_capacity(24_576);
+}
+
+#[test]
+#[should_panic]
+#[ignore = "indexmap implementation has different max capacity"]
+fn with_capacity_overflow() {
+    HeaderMap::<u32>::with_capacity(24_577);
+}
+
+#[test]
+#[should_panic]
 fn reserve_overflow() {
     // See https://github.com/hyperium/http/issues/352
     let mut headers = HeaderMap::<u32>::with_capacity(0);
@@ -45,7 +66,6 @@ fn reserve_overflow() {
 }
 
 #[test]
-#[ignore = "Due to changing the implementation, we no longer allow multiple headers of the same name"]
 fn drain() {
     let mut headers = HeaderMap::new();
 
@@ -87,8 +107,10 @@ fn drain() {
         assert_eq!(name.unwrap().as_str(), "hello");
         assert_eq!(value, "world");
 
+        #[allow(unused_variables)]
         let (name, value) = iter.next().unwrap();
-        assert_eq!(name, None);
+        // Our implementation passes names always
+        // assert_eq!(name, None);
         assert_eq!(value, "world2");
 
         let (name, value) = iter.next().unwrap();
@@ -100,17 +122,16 @@ fn drain() {
 }
 
 #[test]
-#[ignore = "Due to changing the implementation, we no longer allow multiple headers of the same name"]
 fn drain_drop_immediately() {
     // test mem::forgetting does not double-free
 
     let mut headers = HeaderMap::new();
     headers.insert("hello", "world".parse().unwrap());
     headers.insert("zomg", "bar".parse().unwrap());
-    headers.insert("hello", "world2".parse().unwrap());
+    headers.append("hello", "world2".parse().unwrap());
 
     let iter = headers.drain();
-    assert_eq!(iter.size_hint(), (2, Some(3)));
+    assert_eq!(iter.size_hint(), (2, None));
     // not consuming `iter`
 }
 
@@ -126,7 +147,7 @@ fn drain_forget() {
 
     {
         let mut iter = headers.drain();
-        assert_eq!(iter.size_hint(), (2, Some(2)));
+        assert_eq!(iter.size_hint(), (2, None));
         let _ = iter.next().unwrap();
         std::mem::forget(iter);
     }
@@ -135,7 +156,6 @@ fn drain_forget() {
 }
 
 #[test]
-#[ignore = "Due to changing the implementation, we no longer allow multiple headers of the same name"]
 fn drain_entry() {
     let mut headers = HeaderMap::new();
 
@@ -197,19 +217,19 @@ fn eq() {
     assert_eq!(a, b);
 
     a.insert("foo".parse::<HeaderName>().unwrap(), "bar".parse().unwrap());
-    a.insert("foo2".parse::<HeaderName>().unwrap(), "baz".parse().unwrap());
+    a.append("foo".parse::<HeaderName>().unwrap(), "baz".parse().unwrap());
     assert_ne!(a, b);
 
     b.insert("foo".parse::<HeaderName>().unwrap(), "bar".parse().unwrap());
     assert_ne!(a, b);
 
-    b.insert("foo2".parse::<HeaderName>().unwrap(), "baz".parse().unwrap());
+    b.append("foo".parse::<HeaderName>().unwrap(), "baz".parse().unwrap());
     assert_eq!(a, b);
 
-    a.insert("a".parse::<HeaderName>().unwrap(), "a".parse().unwrap());
-    a.insert("a".parse::<HeaderName>().unwrap(), "b".parse().unwrap());
-    b.insert("a".parse::<HeaderName>().unwrap(), "b".parse().unwrap());
-    b.insert("a".parse::<HeaderName>().unwrap(), "a".parse().unwrap());
+    a.append("a".parse::<HeaderName>().unwrap(), "a".parse().unwrap());
+    a.append("a".parse::<HeaderName>().unwrap(), "b".parse().unwrap());
+    b.append("a".parse::<HeaderName>().unwrap(), "b".parse().unwrap());
+    b.append("a".parse::<HeaderName>().unwrap(), "a".parse().unwrap());
 
     assert_ne!(a, b);
 }
@@ -221,9 +241,9 @@ fn into_header_name() {
     m.insert(&ACCEPT, "*/*".parse().unwrap());
     m.insert("connection", "keep-alive".parse().unwrap());
 
-    m.insert(LOCATION, "/".parse().unwrap());
-    m.insert(&VIA, "bob".parse().unwrap());
-    m.insert("transfer-encoding", "chunked".parse().unwrap());
+    m.append(LOCATION, "/".parse().unwrap());
+    m.append(&VIA, "bob".parse().unwrap());
+    m.append("transfer-encoding", "chunked".parse().unwrap());
 
     assert_eq!(m.len(), 6);
 }
@@ -287,7 +307,6 @@ fn insert_79_custom_std_headers() {
 }
 
 #[test]
-#[ignore = "Due to changing the implementation, we no longer allow multiple headers of the same name"]
 fn append_multiple_values() {
     let mut map = HeaderMap::new();
 
@@ -412,7 +431,6 @@ fn value_htab() {
 
 
 #[test]
-#[ignore = "Due to changing the implementation, we no longer allow multiple headers of the same name"]
 fn remove_multiple_a() {
     let mut headers = HeaderMap::new();
     headers.insert(VIA, "1.1 example.com".parse().unwrap());
@@ -438,7 +456,6 @@ fn remove_multiple_a() {
 }
 
 #[test]
-#[ignore = "Due to changing the implementation, we no longer allow multiple headers of the same name"]
 fn remove_multiple_b() {
     let mut headers = HeaderMap::new();
     headers.insert(VIA, "1.1 example.com".parse().unwrap());
@@ -464,7 +481,6 @@ fn remove_multiple_b() {
 }
 
 #[test]
-#[ignore = "Due to changing the implementation, we no longer allow multiple headers of the same name"]
 fn remove_entry_multi_0() {
     let mut headers = HeaderMap::new();
     let cookies = remove_all_values(&mut headers, SET_COOKIE);
@@ -473,7 +489,6 @@ fn remove_entry_multi_0() {
 }
 
 #[test]
-#[ignore = "Due to changing the implementation, we no longer allow multiple headers of the same name"]
 fn remove_entry_multi_0_others() {
     let mut headers = HeaderMap::new();
     headers.insert(VIA, "1.1 example.com".parse().unwrap());
@@ -485,7 +500,6 @@ fn remove_entry_multi_0_others() {
 }
 
 #[test]
-#[ignore = "Due to changing the implementation, we no longer allow multiple headers of the same name"]
 fn remove_entry_multi_1() {
     let mut headers = HeaderMap::new();
     headers.insert(SET_COOKIE, "cookie_1=value 1".parse().unwrap());
@@ -496,7 +510,6 @@ fn remove_entry_multi_1() {
 }
 
 #[test]
-#[ignore = "Due to changing the implementation, we no longer allow multiple headers of the same name"]
 fn remove_entry_multi_1_other() {
     let mut headers = HeaderMap::new();
     headers.insert(SET_COOKIE, "cookie_1=value 1".parse().unwrap());
@@ -513,7 +526,6 @@ fn remove_entry_multi_1_other() {
 
 // For issue hyperimum/http#446
 #[test]
-#[ignore = "Due to changing the implementation, we no longer allow multiple headers of the same name"]
 fn remove_entry_multi_2() {
     let mut headers = HeaderMap::new();
     headers.insert(SET_COOKIE, "cookie_1=value 1".parse().unwrap());
@@ -525,7 +537,6 @@ fn remove_entry_multi_2() {
 }
 
 #[test]
-#[ignore = "Due to changing the implementation, we no longer allow multiple headers of the same name"]
 fn remove_entry_multi_3() {
     let mut headers = HeaderMap::new();
     headers.insert(SET_COOKIE, "cookie_1=value 1".parse().unwrap());
@@ -538,7 +549,6 @@ fn remove_entry_multi_3() {
 }
 
 #[test]
-#[ignore = "Due to changing the implementation, we no longer allow multiple headers of the same name"]
 fn remove_entry_multi_3_others() {
     let mut headers = HeaderMap::new();
     headers.insert(VIA, "1.1 example.com".parse().unwrap());
@@ -571,7 +581,6 @@ fn remove_all_values<K>(headers: &mut HeaderMap, key: K) -> Vec<HeaderValue>
 }
 
 #[test]
-#[ignore = "Due to changing the implementation, we no longer allow multiple headers of the same name"]
 fn remove_entry_3_others_a() {
     let mut headers = HeaderMap::new();
     headers.insert(VIA, "1.1 example.com".parse().unwrap());
@@ -597,7 +606,6 @@ fn remove_entry_3_others_a() {
 }
 
 #[test]
-#[ignore = "Due to changing the implementation, we no longer allow multiple headers of the same name"]
 fn remove_entry_3_others_b() {
     let mut headers = HeaderMap::new();
     headers.insert(VIA, "1.1 example.com".parse().unwrap());
