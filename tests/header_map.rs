@@ -107,10 +107,8 @@ fn drain() {
         assert_eq!(name.unwrap().as_str(), "hello");
         assert_eq!(value, "world");
 
-        #[allow(unused_variables)]
         let (name, value) = iter.next().unwrap();
-        // Our implementation passes names always
-        // assert_eq!(name, None);
+        assert_eq!(name, None);
         assert_eq!(value, "world2");
 
         let (name, value) = iter.next().unwrap();

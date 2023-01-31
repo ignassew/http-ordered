@@ -664,7 +664,7 @@ impl<T> HeaderMap<T> {
     ///
     ///
     /// assert_eq!(drain.next(), Some((Some(HOST), "hello".parse().unwrap())));
-    /// assert_eq!(drain.next(), Some((Some(HOST), "goodbye".parse().unwrap())));
+    /// assert_eq!(drain.next(), Some((None, "goodbye".parse().unwrap())));
     ///
     /// assert_eq!(drain.next(), Some((Some(CONTENT_LENGTH), "123".parse().unwrap())));
     ///
@@ -1215,9 +1215,10 @@ impl<'a, T> Iterator for Drain<'a, T> {
             return Some(self.buffer.remove(0))
         }
         assert_eq!(self.buffer.len(), 0);
-        if let Some(pair) = self.inner.next() {
-            for v in pair.1 {
-                self.buffer.push((Some(pair.0.clone()), v));
+        if let Some(mut pair) = self.inner.next() {
+            self.buffer.push((Some(pair.0), pair.1.remove(0)));
+            while pair.1.len() != 0 {
+                self.buffer.push((None, pair.1.remove(0)));
             }
             Some(self.buffer.remove(0))
         } else {
@@ -1550,9 +1551,10 @@ impl<T> Iterator for IntoIter<T> {
             return Some(self.buffer.remove(0))
         }
         assert_eq!(self.buffer.len(), 0);
-        if let Some(pair) = self.inner.next() {
-            for v in pair.1 {
-                self.buffer.push((Some(pair.0.clone()), v));
+        if let Some(mut pair) = self.inner.next() {
+            self.buffer.push((Some(pair.0), pair.1.remove(0)));
+            while pair.1.len() != 0 {
+                self.buffer.push((None, pair.1.remove(0)));
             }
             Some(self.buffer.remove(0))
         } else {
