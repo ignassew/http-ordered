@@ -1889,7 +1889,8 @@ impl<'a, T> IntoIterator for OccupiedEntry<'a, T> {
     type IntoIter = ValueIterMut<'a, T>;
 
     fn into_iter(self) -> ValueIterMut<'a, T> {
-        todo!()
+        let values = self.map.get_mut2(&self.key).unwrap().iter_mut();
+        ValueIterMut { inner: Some(values) }
     }
 }
 
