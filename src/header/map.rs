@@ -3,6 +3,7 @@ use std::convert::TryFrom;
 use std::hash::Hash;
 use std::iter::{FromIterator, FusedIterator};
 use std::marker::PhantomData;
+use std::mem::replace;
 use std::ops::RangeFull;
 use std::{fmt, ops};
 
@@ -155,7 +156,8 @@ pub enum Entry<'a, T: 'a> {
 /// This struct is returned as part of the `Entry` enum.
 #[derive(Debug)]
 pub struct VacantEntry<'a, T> {
-    inner: indexmap::map::VacantEntry<'a, HeaderName, Vec<T>>
+    map: &'a mut HeaderMap<T>,
+    key: HeaderName
 }
 
 /// A view into a single occupied location in a `HeaderMap`.
@@ -163,7 +165,8 @@ pub struct VacantEntry<'a, T> {
 /// This struct is returned as part of the `Entry` enum.
 #[derive(Debug)]
 pub struct OccupiedEntry<'a, T> {
-    inner: indexmap::map::OccupiedEntry<'a, HeaderName, Vec<T>>
+    map: &'a mut HeaderMap<T>,
+    key: HeaderName
 }
 
 /// An iterator of all values associated with a single header name.
@@ -426,6 +429,14 @@ impl<T> HeaderMap<T> {
         }
 
         None
+    }
+
+    fn get2(&self, key: &HeaderName) -> Option<&Vec<T>> {
+        self.inner.get(key)
+    }
+
+    fn get_mut2(&mut self, key: &HeaderName) -> Option<&mut Vec<T>> {
+        self.inner.get_mut(key)
     }
 
     /// Returns a mutable reference to the value associated with the key.
@@ -702,10 +713,11 @@ impl<T> HeaderMap<T> {
     where
         K: IntoHeaderName,
     {
-        let key: HeaderName = key.try_into().ok().unwrap();
-        match self.inner.entry(key) {
-            indexmap::map::Entry::Occupied(inner) => Entry::Occupied(OccupiedEntry { inner }),
-            indexmap::map::Entry::Vacant(inner) => Entry::Vacant(VacantEntry { inner }),
+        let key: HeaderName = key.try_into().ok().unwrap().clone();
+        if self.inner.contains_key(&key) {
+            Entry::Occupied(OccupiedEntry { map: self, key })
+        } else {
+            Entry::Vacant(VacantEntry { map: self, key })
         }
         
     }
@@ -839,6 +851,10 @@ impl<T> HeaderMap<T> {
                     Some(f.remove(0))
                 }
             )
+    }
+
+    fn remove_all(&mut self, key: &HeaderName) -> Option<Vec<T>> {
+        self.inner.shift_remove(key)
     }
 }
 
@@ -1358,7 +1374,7 @@ impl<'a, T> VacantEntry<'a, T> {
     /// assert_eq!(map.entry("x-hello").key().as_str(), "x-hello");
     /// ```
     pub fn key(&self) -> &HeaderName {
-        self.inner.key()
+        &self.key
     }
 
     /// Take ownership of the key
@@ -1374,7 +1390,7 @@ impl<'a, T> VacantEntry<'a, T> {
     /// }
     /// ```
     pub fn into_key(self) -> HeaderName {
-        self.inner.into_key()
+        self.key
     }
 
     /// Insert the value into the entry.
@@ -1395,7 +1411,9 @@ impl<'a, T> VacantEntry<'a, T> {
     /// assert_eq!(map["x-hello"], "world");
     /// ```
     pub fn insert(self, value: T) -> &'a mut T {
-        self.inner.insert(vec![value]).first_mut().expect("vector has 1 element")
+        // This entry is vacant, so there shouldn't be any values before.
+        assert!(self.map.insert(&self.key, value).is_none()); 
+        self.map.get_mut(&self.key).unwrap()
     }
 
     /// Insert the value into the entry.
@@ -1417,8 +1435,11 @@ impl<'a, T> VacantEntry<'a, T> {
     /// assert_eq!(map["x-hello"], "world2");
     /// ```
     pub fn insert_entry(self, value: T) -> OccupiedEntry<'a, T> {
-        self.inner.insert(vec![value]);
-        todo!()
+        self.map.insert(&self.key, value);
+        OccupiedEntry {
+            map: self.map,
+            key: self.key
+        }
     }
 }
 
@@ -1586,7 +1607,7 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// }
     /// ```
     pub fn key(&self) -> &HeaderName {
-        self.inner.key()
+        &self.key
     }
 
     /// Get a reference to the first value in the entry.
@@ -1613,7 +1634,7 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// }
     /// ```
     pub fn get(&self) -> &T {
-        self.inner.get().first().unwrap()
+        self.map.get(&self.key).unwrap()
     }
 
     /// Get a mutable reference to the first value in the entry.
@@ -1637,7 +1658,7 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// }
     /// ```
     pub fn get_mut(&mut self) -> &mut T {
-        self.inner.get_mut().first_mut().unwrap()
+        self.map.get_mut(&self.key).unwrap()
     }
 
     /// Converts the `OccupiedEntry` into a mutable reference to the **first**
@@ -1664,7 +1685,7 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// assert_eq!("hello.world-2", map["host"]);
     /// ```
     pub fn into_mut(self) -> &'a mut T {
-        self.inner.into_mut().first_mut().unwrap()
+        self.map.get_mut(&self.key).unwrap()
     }
 
     /// Sets the value of the entry.
@@ -1687,7 +1708,7 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// assert_eq!("earth", map["host"]);
     /// ```
     pub fn insert(&mut self, value: T) -> T {
-        self.inner.insert(vec![value]).remove(0)
+        self.map.insert(&self.key, value).unwrap()
     }
 
     /// Sets the value of the entry.
@@ -1713,7 +1734,8 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// assert_eq!("earth", map["host"]);
     /// ```
     pub fn insert_mult(&mut self, value: T) -> ValueDrain<'_, T> {
-        let old_value = self.inner.insert(vec![value]);
+        let dest = self.map.get_mut2(&self.key).unwrap();
+        let old_value = replace(dest, vec![value]);
         ValueDrain { inner: old_value, lt: PhantomData }
     }
 
@@ -1739,9 +1761,8 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// assert_eq!("earth", *i.next().unwrap());
     /// ```
     pub fn append(&mut self, value: T) {
-        self.inner
-            .get_mut()
-            .push(value)
+        let result = self.map.append(&self.key, value);
+        assert_eq!(result, true) // We are in occupied entry so it had to exist.
     }
 
     /// Remove the entry from the map.
@@ -1764,7 +1785,7 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// assert!(!map.contains_key("host"));
     /// ```
     pub fn remove(self) -> T {
-        self.inner.shift_remove().remove(0)
+        self.map.remove(&self.key).unwrap()
     }
 
     /// Remove the entry from the map.
@@ -1789,8 +1810,8 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// assert!(!map.contains_key("host"));
     /// ```
     pub fn remove_entry(self) -> (HeaderName, T) {
-        let (k, mut v) = self.inner.shift_remove_entry();
-        (k, v.remove(0))
+        let value = self.map.remove(&self.key).unwrap();
+        (self.key, value)
     }
 
     /// Remove the entry from the map.
@@ -1799,8 +1820,14 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// returned.
     ///
     pub fn remove_entry_mult(self) -> (HeaderName, ValueDrain<'a, T>) {
-        let (k, v) = self.inner.shift_remove_entry();
-        (k, ValueDrain { inner: v, lt: PhantomData })
+        let values = self.map.remove_all(&self.key).unwrap();
+        (
+            self.key,
+            ValueDrain {
+                inner: values,
+                lt: PhantomData 
+            }
+        )
     }
 
     /// Returns an iterator visiting all values associated with the entry.
@@ -1823,7 +1850,8 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// }
     /// ```
     pub fn iter(&self) -> ValueIter<'_, T> {
-        ValueIter { inner: Some(self.inner.get().iter()) }
+        let values = self.map.get2(&self.key).unwrap().iter();
+        ValueIter { inner: Some(values) }
     }
 
     /// Returns an iterator mutably visiting all values associated with the
@@ -1851,7 +1879,8 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// assert_eq!(&"earth-boop", i.next().unwrap());
     /// ```
     pub fn iter_mut(&mut self) -> ValueIterMut<'_, T> {
-        ValueIterMut { inner: Some(self.inner.get_mut().iter_mut()) }
+        let values = self.map.get_mut2(&self.key).unwrap().iter_mut();
+        ValueIterMut { inner: Some(values) }
     }
 }
 
