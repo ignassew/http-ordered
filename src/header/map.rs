@@ -922,11 +922,11 @@ impl<T> IntoIterator for HeaderMap<T> {
     /// let mut iter = map.into_iter();
     ///
     /// assert_eq!(iter.next(), Some((Some(header::CONTENT_LENGTH), "123".parse().unwrap())));
-    /// assert_eq!(iter.next(), Some((Some(header::CONTENT_LENGTH), "456".parse().unwrap())));
+    /// assert_eq!(iter.next(), Some((None, "456".parse().unwrap())));
     ///
     /// assert_eq!(iter.next(), Some((Some(header::CONTENT_TYPE), "json".parse().unwrap())));
-    /// assert_eq!(iter.next(), Some((Some(header::CONTENT_TYPE), "html".parse().unwrap())));
-    /// assert_eq!(iter.next(), Some((Some(header::CONTENT_TYPE), "xml".parse().unwrap())));
+    /// assert_eq!(iter.next(), Some((None, "html".parse().unwrap())));
+    /// assert_eq!(iter.next(), Some((None, "xml".parse().unwrap())));
     /// assert!(iter.next().is_none());
     /// ```
     fn into_iter(self) -> IntoIter<T> {
@@ -1991,4 +1991,12 @@ fn test_bounds() {
     check_bounds::<ValueIter<'static, ()>>();
     check_bounds::<ValueIterMut<'static, ()>>();
     check_bounds::<ValueDrain<'static, ()>>();
+}
+
+#[test]
+fn skip_duplicates_during_key_iteration() {
+    let mut map = HeaderMap::new();
+    map.append("a", HeaderValue::from_static("a"));
+    map.append("a", HeaderValue::from_static("b"));
+    assert_eq!(map.keys().count(), map.keys_len());
 }
