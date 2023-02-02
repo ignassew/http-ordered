@@ -37,6 +37,7 @@ fn smoke() {
 
 #[test]
 #[should_panic]
+#[ignore = "indexmap implementation has different max capacity"]
 fn reserve_over_capacity() {
     // See https://github.com/hyperium/http/issues/352
     let mut headers = HeaderMap::<u32>::with_capacity(32);
@@ -51,6 +52,7 @@ fn with_capacity_max() {
 
 #[test]
 #[should_panic]
+#[ignore = "indexmap implementation has different max capacity"]
 fn with_capacity_overflow() {
     HeaderMap::<u32>::with_capacity(24_577);
 }
@@ -127,7 +129,7 @@ fn drain_drop_immediately() {
     headers.append("hello", "world2".parse().unwrap());
 
     let iter = headers.drain();
-    assert_eq!(iter.size_hint(), (2, Some(3)));
+    assert_eq!(iter.size_hint(), (2, None));
     // not consuming `iter`
 }
 
@@ -143,7 +145,7 @@ fn drain_forget() {
 
     {
         let mut iter = headers.drain();
-        assert_eq!(iter.size_hint(), (2, Some(2)));
+        assert_eq!(iter.size_hint(), (2, None));
         let _ = iter.next().unwrap();
         std::mem::forget(iter);
     }

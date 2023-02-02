@@ -36,6 +36,7 @@ exclude = [
 bytes = "1"
 fnv = "1.0.5"
 itoa = "1"
+indexmap = "1.9.2"
 
 [dev-dependencies]
 indexmap = "<=1.8"
