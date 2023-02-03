@@ -12,7 +12,7 @@ Due to some borrow checker inconsistencies (PRs are welcome), you won't be able 
 Once you have fixed that issue, you will need to insert this in your `Cargo.toml`:
 ```toml
 [patch.crates-io]
-http = { git = "https://github.com/ignassew/http-ordered", package = "http-ordered" }
+http = { git = "https://github.com/ignassew/http-ordered" }
 ```
 
 If you don't want to patch the library yourself, check out [reqwestplus](#reqwestplus)

@@ -1,5 +1,5 @@
 [package]
-name = "http-ordered"
+name = "http"
 # When releasing to crates.io:
 # - Update html_root_url in lib.rs.
 # - Update CHANGELOG.md.
