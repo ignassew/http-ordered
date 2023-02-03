@@ -856,6 +856,42 @@ impl<T> HeaderMap<T> {
     fn remove_all(&mut self, key: &HeaderName) -> Option<Vec<T>> {
         self.inner.shift_remove(key)
     }
+
+    /// Sort the headers in place using the comparison
+    /// function `cmp`.
+    ///
+    /// The comparison function receives two HeaderName and a vector of HeaderValue pairs to compare (you
+    /// can sort by names or values or their combination as needed).
+    ///
+    /// # Examples
+    /// ```
+    /// # use http::HeaderMap;
+    /// # use http::header::{HOST, COOKIE};
+    /// let mut map = HeaderMap::new();
+    /// map.insert(HOST, "hello.world".parse().unwrap());
+    /// map.append(HOST, "foo.bar".parse().unwrap());
+    /// map.insert(COOKIE, "hello".parse().unwrap());
+    /// map.append(COOKIE, "world".parse().unwrap());
+    /// map.insert("third", "baz".parse().unwrap());
+    ///
+    /// map.sort_by(|k1, v1, k2, v2| {
+    ///     k1.to_string().cmp(&k2.to_string())
+    /// });
+    ///
+    /// let mut iter = map.into_iter();
+    ///
+    /// assert_eq!(iter.next().unwrap().0, Some(COOKIE));
+    /// assert_eq!(iter.next().unwrap().0, None);
+    /// assert_eq!(iter.next().unwrap().0, Some(HOST));
+    /// assert_eq!(iter.next().unwrap().0, None);
+    /// assert_eq!(iter.next().unwrap().0, Some("third".parse().unwrap()));
+    /// ```
+    pub fn sort_by<F>(&mut self, cmp: F)
+    where
+        F: FnMut(&HeaderName, &Vec<T>, &HeaderName, &Vec<T>) -> std::cmp::Ordering,
+    {
+        self.inner.sort_by(cmp);
+    }
 }
 
 impl<'a, T> IntoIterator for &'a HeaderMap<T> {
